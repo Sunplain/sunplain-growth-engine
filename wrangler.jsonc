@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "sunplain-growth-engine",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-07",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "sunplain-growth-engine-db",
+    "database_id": "6cd42ec1-b0a4-4f49-94f4-253c731e3953",
+    "migrations_dir": "migrations/sunplain"
+  }],
+  "vars": {"ENGINE_MODE": "human_review_only"},
+  "ai": {"binding": "AI"}
+}

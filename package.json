@@ -1,0 +1,13 @@
+{
+  "name": "sunplain-growth-engine",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run",
+    "deploy": "wrangler d1 migrations apply sunplain-growth-engine-db --remote && wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.92.0"
+  }
+}
