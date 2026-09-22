@@ -171,7 +171,11 @@ const renderedHtml = html
   .replaceAll(
     "body:JSON.stringify({phrases})",
     'body:JSON.stringify({phrases,target:$("#target").value})',
-  );
+  )
+  .replace("<h2>1. 何を売りたいですか？</h2>", "<h2>1. ニーズを教えてください</h2>")
+  .replace("<button id=web disabled>LinkedIn / X の投稿を探す</button><button id=reddit disabled>Redditで候補を探す</button>", "<button id=web disabled>LinkedIn / X の投稿を探す</button><button id=reddit disabled>Redditで候補を探す</button><button id=weball disabled>Web全体から探す</button>")
+  .replace('$("#web").onclick=()=>search("/api/search/web","公開投稿");$("#reddit").onclick=()=>search("/api/search/reddit","Reddit");', '$("#web").onclick=()=>search("/api/search/web","公開投稿");$("#reddit").onclick=()=>search("/api/search/reddit","Reddit");$("#weball").onclick=()=>search("/api/search/weball","Web全体");')
+  .replace('$("#web").disabled=false;$("#reddit").disabled=false', '$("#web").disabled=false;$("#reddit").disabled=false;$("#weball").disabled=false');
 async function countAvailable(db: DB) {
   const x = await db
     .prepare("SELECT runs FROM sales_search_usage WHERE usage_day=?")
@@ -247,6 +251,49 @@ async function publicPostSearch(
     candidates: candidates.slice(0, 20),
     remaining_searches: Math.max(0, available - queries.length),
   };
+}
+async function wholeWebSearch(
+  db: DB,
+  phrases: string[],
+  target: "buyer" | "supplier",
+) {
+  const available = await countAvailable(db);
+  if (available < 1)
+    return {
+      error: "本日の無料検索上限（10回）に達しました。明日また実行できます。",
+      status: 429,
+    };
+  const query = phrases.find((x) => x.trim());
+  if (!query) return { error: "先にAI整理を実行してください。", status: 400 };
+  const r = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "X-Tavily-Access-Mode": "keyless",
+    },
+    body: JSON.stringify({ query, max_results: 12, search_depth: "advanced" }),
+  });
+  if (!r.ok) throw Error("search");
+  const x = (await r.json()) as {
+    results?: Array<{ title?: string; content?: string; url?: string }>;
+  };
+  await addUsage(db, 1);
+  const candidates = (x.results ?? [])
+    .map((item) => {
+      const title = item.title ?? "公開ページ";
+      const excerpt = (item.content ?? title).slice(0, 700);
+      return {
+        title,
+        excerpt,
+        display_name: title.slice(0, 160),
+        url: item.url ?? "",
+        source: "Web上の公開ページ",
+        fit_score: relevanceScore(title, excerpt, target),
+      };
+    })
+    .filter((item) => item.url && item.fit_score >= 3)
+    .sort((a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0));
+  return { candidates, remaining_searches: Math.max(0, available - 1) };
 }
 async function createLead(r: Request, e: Env) {
   const b = (await r.json()) as {
@@ -347,6 +394,19 @@ export default {
         return "error" in x ? json({ error: x.error }, x.status) : json(x);
       } catch {
         return json({ error: "公開投稿検索を実行できませんでした。" }, 503);
+      }
+    }
+    if (r.method === "POST" && u.pathname === "/api/search/weball") {
+      const b = (await r.json()) as { phrases?: string[]; target?: string };
+      try {
+        const x = await wholeWebSearch(
+          e.DB,
+          b.phrases ?? [],
+          b.target === "supplier" ? "supplier" : "buyer",
+        );
+        return "error" in x ? json({ error: x.error }, x.status) : json(x);
+      } catch {
+        return json({ error: "Web全体の検索を実行できませんでした。" }, 503);
       }
     }
     if (r.method === "POST" && u.pathname === "/api/search/reddit") {
