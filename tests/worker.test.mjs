@@ -18,6 +18,13 @@ test("company map does not claim current demand", () => {
 
 test("buyer demand ranking rejects supplier promotion and accepts a sourcing signal", () => {
   const plan = fallbackPlan({ target: "buyer", mode: "demand", product: "Japanese seafood", geographies: ["Thailand"], companyTypes: [], triggers: [], exclusions: "" });
-  assert.ok(scoreCandidate("Need Japanese seafood supplier", "Our purchasing team is looking for a supplier to import frozen scallops.", plan) >= 4);
+  assert.ok(scoreCandidate("Bangkok restaurant is looking for a supplier", "We need a supplier to import Japanese frozen scallops for our Thailand locations.", plan) >= 10);
   assert.ok(scoreCandidate("Japanese seafood supplier", "We supply frozen food globally.", plan) < 4);
+});
+
+test("buyer demand ranking rejects procurement commentary without a live product request", () => {
+  const plan = fallbackPlan({ target: "buyer", mode: "demand", product: "日本産の冷凍水産物", geographies: ["東南アジア"], companyTypes: [], triggers: [], exclusions: "" });
+  assert.equal(scoreCandidate("Procurement Beyond Buying", "Supply Chain & Procurement Professional | Strategic Sourcing | Food & Beverage Industry", plan), -100);
+  assert.equal(scoreCandidate("Sourcing Strategies", "Procurement vs sales process. Supplier selection starts after market research.", plan), -100);
+  assert.equal(scoreCandidate("Japan food buyer wanted", "We are looking for a supplier of Japanese frozen seafood for our Singapore restaurants.", plan) >= 10, true);
 });
