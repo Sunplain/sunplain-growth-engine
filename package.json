@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "wrangler deploy --dry-run",
+    "test": "node --test tests/worker.test.mjs",
     "deploy": "wrangler d1 migrations apply sunplain-growth-engine-db --remote && wrangler deploy"
   },
   "devDependencies": {
