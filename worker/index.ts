@@ -25,7 +25,7 @@ const html=[
 "<script src=/app.js></script>"
 ].join("");
 
-async function countAvailable(db:DB){const x=await db.prepare("SELECT runs FROM sales_search_usage WHERE usage_day=?").bind(day()).first<{runs:number}>();return LIMIT-(x?.runs??0)}
+async function usageToday(db:DB){const x=await db.prepare("SELECT runs FROM sales_search_usage WHERE usage_day=?").bind(day()).first<{runs:number}>();return x?.runs??0}\nasync function countAvailable(db:DB){const x=await db.prepare("SELECT runs FROM sales_search_usage WHERE usage_day=?").bind(day()).first<{runs:number}>();return LIMIT-(x?.runs??0)}
 async function addUsage(db:DB,runs:number){await db.prepare("INSERT INTO sales_search_usage (usage_day,runs,updated_at) VALUES (?,?,?) ON CONFLICT(usage_day) DO UPDATE SET runs=runs+excluded.runs,updated_at=excluded.updated_at").bind(day(),runs,now()).run()}
 function intentQueries(region:string,needs:string[]){const geo=region&&region!=="global"?' "'+region+'"':"",neg=' -"I offer" -"we offer" -"our service" -"proxy service" -"personal shopper" -fiverr',q:string[]=[];const add=(x:string)=>{if(!q.includes(x))q.push(x+neg)};if(needs.includes("partner")){add('"looking for someone in Japan" sourcing'+geo);add('"looking for" "Japan sourcing partner"'+geo);add('"long term" "looking for" Japan proxy'+geo)}if(needs.includes("supplier")){add('"looking for Japanese supplier"'+geo);add('"need supplier in Japan"'+geo);add('"supplier wanted" Japan'+geo)}if(needs.includes("buy")){add('"need someone in Japan" buy purchase'+geo);add('"looking for" "Japan purchasing agent"'+geo)}if(needs.includes("find"))add('"looking for" "in Japan" source product'+geo);if(needs.includes("receive")||needs.includes("consolidate")){add('"looking for" "Japan proxy" consolidate ship'+geo);add('"need someone in Japan" receive ship'+geo)}if(!q.length){add('"looking for someone in Japan" sourcing'+geo);add('"looking for" "Japan sourcing agent"'+geo)}return q.slice(0,8)}
 function platform(url:string){try{const u=new URL(url),h=u.hostname.toLowerCase(),p=u.pathname;if(h.includes("reddit.com"))return"Reddit";if(h.endsWith("linkedin.com")&&p.startsWith("/posts/"))return"LinkedIn 公開投稿";if((h==="x.com"||h.endsWith("twitter.com"))&&p.includes("/status/"))return"X 公開投稿"}catch{}return"Web"}
@@ -72,7 +72,43 @@ async function judge(e:Env,items:Raw[],target:string){
     return[];
   }
 }
-async function searchAll(r:Request,e:Env){const b=await r.json()as{region?:string;target?:string;needs?:string[]},qs=intentQueries(b.region||"global",b.needs||Object.keys(needLabels)),available=await countAvailable(e.DB);if(available<1)return json({error:"本日のWeb検索上限（10回）に達しました。明日また実行できます。"},429);const used=Math.min(available,6),all:Raw[]=[];for(const q of qs.slice(0,used))all.push(...await tavily(q,"explicit_demand"));await addUsage(e.DB,used);for(const q of qs.slice(0,3))all.push(...await reddit(q));let extra=0;if(available-used>=1){all.push(...await tavily('site:exporthub.com OR site:tradekey.com OR site:ec21.com OR site:go4worldbusiness.com "Japan" "buy"',"buying_lead"));extra++}if(extra)await addUsage(e.DB,extra);const seen=new Set<string>(),dedup=all.filter(x=>x.url&&!seen.has(x.url)&&seen.add(x.url)),candidates=await judge(e,dedup,b.target||"business_priority");return json({candidates,remaining_searches:Math.max(0,available-used-extra)})}
+async function searchAll(r:Request,e:Env){
+  const b=await r.json()as{region?:string;target?:string;needs?:string[]};
+  const qs=intentQueries(b.region||"global",b.needs||Object.keys(needLabels));
+  const available=await countAvailable(e.DB);
+  if(available<1)return json({error:"本日のWeb検索上限（10回）に達しました。明日また実行できます。"},429);
+
+  const usedToday=await usageToday(e.DB);
+  const maxWeb=Math.min(3,available);
+  const startAt=qs.length?usedToday%qs.length:0;
+  const selected:string[]=[];
+  for(let i=0;i<maxWeb&&i<qs.length;i++)selected.push(qs[(startAt+i)%qs.length]);
+
+  const all:Raw[]=[];
+  for(const q of selected)all.push(...await tavily(q,"explicit_demand"));
+  if(selected.length)await addUsage(e.DB,selected.length);
+
+  // Reddit uses its own public search endpoint and does not consume the Tavily daily counter.
+  for(const q of selected.slice(0,2))all.push(...await reddit(q));
+
+  // Every second run, use one of the 3 Web slots for a concrete B2B buying lead query.
+  // This keeps total Web usage capped at 3 per click.
+  if(usedToday>=3 && selected.length>0){
+    const buying=await tavily('site:exporthub.com OR site:tradekey.com OR site:ec21.com OR site:go4worldbusiness.com "Japan" ("looking to buy" OR "buying requirement" OR RFQ)',"buying_lead");
+    all.push(...buying);
+    // Count the extra buying-lead query only if there is remaining allowance.
+    if(await countAvailable(e.DB)>0)await addUsage(e.DB,1);
+  }
+
+  const seen=new Set<string>();
+  const dedup=all.filter(x=>x.url&&!seen.has(x.url)&&seen.add(x.url));
+  const candidates=await judge(e,dedup,b.target||"business_priority");
+  return json({
+    candidates,
+    remaining_searches:Math.max(0,await countAvailable(e.DB)),
+    query_rotation:{used:selected.length,start:startAt}
+  })
+}
 async function createLead(r:Request,e:Env){const b=await r.json()as any;if(!b.url||!b.excerpt)return json({error:"候補情報が不足しています。"},400);const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(b.url)),key=Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,"0")).join("");if(await e.DB.prepare("SELECT id FROM sourcing_leads WHERE duplicate_key=?").bind(key).first())return json({error:"この情報は既に接触候補へ追加されています。"},409);const t=now(),signal=id(),lead=id();await e.DB.batch([e.DB.prepare("INSERT INTO sourcing_signals (id,public_url,source_platform,source_type,published_at,display_name,evidence_excerpt,country,buyer_type,need_types,requested_item,repeat_signal,commercial_scale,contact_route,evidence_summary,evidence_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(signal,b.url,b.source_platform||"Web",b.source_type||"explicit_demand",b.published_at||"不明",b.display_name||b.title||"公開情報",b.excerpt,b.country||"不明",b.buyer_type||"不明",JSON.stringify(b.need_types||[]),b.requested_item||"不明",b.repeat_signal||"不明",b.commercial_scale||"不明",b.contact_route||"不明",b.evidence_summary||b.excerpt,b.evidence_status||"要確認",t,t),e.DB.prepare("INSERT INTO sourcing_leads (id,signal_id,display_name,country,public_url,evidence_excerpt,evidence_summary,requested_item,contact_route,duplicate_key,stage,human_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'reviewed','awaiting_review',?,?)").bind(lead,signal,b.display_name||b.title||"公開情報",b.country||"不明",b.url,b.excerpt,b.evidence_summary||b.excerpt,b.requested_item||"不明",b.contact_route||"不明",key,t,t),e.DB.prepare("INSERT INTO sourcing_events (id,lead_id,event_type,from_stage,to_stage,occurred_at) VALUES (?,?,'lead_created','signal_discovered','reviewed',?)").bind(id(),lead,t)]);return json({id:lead},201)}
 async function setStage(r:Request,e:Env,leadId:string){const b=await r.json()as{stage?:string},allowed=["reviewed","contact_ready","contacted","replied","sourcing_request","quote","paid","repeat","larger_order"];if(!b.stage||!allowed.includes(b.stage))return json({error:"無効なステージです。"},400);const old=await e.DB.prepare("SELECT stage FROM sourcing_leads WHERE id=?").bind(leadId).first<{stage:string}>();if(!old)return json({error:"候補が見つかりません。"},404);const t=now();await e.DB.batch([e.DB.prepare("UPDATE sourcing_leads SET stage=?,updated_at=? WHERE id=?").bind(b.stage,t,leadId),e.DB.prepare("INSERT INTO sourcing_events (id,lead_id,event_type,from_stage,to_stage,occurred_at) VALUES (?,?,'stage_changed',?,?,?)").bind(id(),leadId,old.stage,b.stage,t)]);return json({ok:true})}
 export default{async fetch(r:Request,e:Env){const u=new URL(r.url);if(r.method==="GET"&&u.pathname==="/")return new Response(html,{headers:{"content-type":"text/html;charset=utf-8"}});if(r.method==="GET"&&u.pathname==="/app.js")return new Response(APP_JS,{headers:{"content-type":"application/javascript;charset=utf-8","cache-control":"no-store"}});if(r.method==="POST"&&u.pathname==="/api/search"){try{return await searchAll(r,e)}catch{return json({error:"公開情報検索を実行できませんでした。"},503)}}if(r.method==="GET"&&u.pathname==="/api/leads"){const x=await e.DB.prepare("SELECT id,display_name,country,public_url,evidence_excerpt,evidence_summary,requested_item,contact_route,stage FROM sourcing_leads ORDER BY updated_at DESC LIMIT 100").all();return json(x.results)}if(r.method==="POST"&&u.pathname==="/api/leads")return createLead(r,e);const m=u.pathname.match(/^\/api\/leads\/([^/]+)\/stage$/);if(r.method==="POST"&&m)return setStage(r,e,m[1]);return json({error:"not_found"},404)}};
