@@ -1,5 +1,7 @@
 # Sunplain Growth Engine
 
-Independent human-review sales engine. It discovers public demand signals, presents the original post URL, and records only human-confirmed candidates.
+Japan sourcing demand finder for public demand signals.
 
-It does not send messages automatically and does not contain Founder Outreach history.
+The engine looks for people and businesses that are publicly seeking help to source, purchase, receive, consolidate, inspect, or ship goods from Japan. It separates explicit demand, buying leads, and existing importers, preserves the original source URL, and leaves the final decision to a human reviewer.
+
+The engine does not send messages automatically and does not contain Founder Outreach history.
