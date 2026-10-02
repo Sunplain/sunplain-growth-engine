@@ -28,7 +28,52 @@ const html=[
 async function usageToday(db:DB){const x=await db.prepare("SELECT runs FROM sales_search_usage WHERE usage_day=?").bind(day()).first<{runs:number}>();return x?.runs??0}
 async function countAvailable(db:DB){const x=await db.prepare("SELECT runs FROM sales_search_usage WHERE usage_day=?").bind(day()).first<{runs:number}>();return LIMIT-(x?.runs??0)}
 async function addUsage(db:DB,runs:number){await db.prepare("INSERT INTO sales_search_usage (usage_day,runs,updated_at) VALUES (?,?,?) ON CONFLICT(usage_day) DO UPDATE SET runs=runs+excluded.runs,updated_at=excluded.updated_at").bind(day(),runs,now()).run()}
-function intentQueries(region:string,needs:string[]){const geo=region&&region!=="global"?' "'+region+'"':"",neg=' -"I offer" -"we offer" -"our service" -"proxy service" -"personal shopper" -fiverr',q:string[]=[];const add=(x:string)=>{if(!q.includes(x))q.push(x+neg)};if(needs.includes("partner")){add('"looking for someone in Japan" sourcing'+geo);add('"looking for" "Japan sourcing partner"'+geo);add('"long term" "looking for" Japan proxy'+geo)}if(needs.includes("supplier")){add('"looking for Japanese supplier"'+geo);add('"need supplier in Japan"'+geo);add('"supplier wanted" Japan'+geo)}if(needs.includes("buy")){add('"need someone in Japan" buy purchase'+geo);add('"looking for" "Japan purchasing agent"'+geo)}if(needs.includes("find"))add('"looking for" "in Japan" source product'+geo);if(needs.includes("consolidate")){add('"looking for" "Japan proxy" consolidate ship'+geo);add('"need someone in Japan" receive ship'+geo)}if(!q.length){add('"looking for someone in Japan" sourcing'+geo);add('"looking for" "Japan sourcing agent"'+geo)}return q.slice(0,8)}
+function intentQueries(region:string,needs:string[]){
+  const geo=region&&region!=="global"?' "'+region+'"':"";
+  const q:string[]=[];
+  const add=(x:string)=>{if(!q.includes(x))q.push(x)};
+  if(needs.includes("partner")){
+    add('"looking for someone in Japan"'+geo);
+    add('"seeking" "Japan" sourcing partner'+geo);
+    add('"looking for" "Japan-based" partner buying sourcing'+geo);
+  }
+  if(needs.includes("supplier")){
+    add('"looking for Japanese supplier"'+geo);
+    add('"seeking Japanese supplier"'+geo);
+    add('"supplier wanted" Japan'+geo);
+  }
+  if(needs.includes("buy")){
+    add('"need someone in Japan" buy'+geo);
+    add('"looking for" "Japan purchasing agent"'+geo);
+    add('"looking to buy from Japan"'+geo);
+  }
+  if(needs.includes("find")){
+    add('"looking for" "in Japan" source product'+geo);
+    add('"can someone help" buy Japan'+geo);
+  }
+  if(needs.includes("consolidate")){
+    add('"looking for" Japan consolidate ship'+geo);
+    add('"need" Japan proxy consolidate'+geo);
+  }
+  if(!q.length){
+    add('"looking for someone in Japan"');
+    add('"looking to buy from Japan"');
+    add('"looking for Japanese supplier"');
+  }
+  return q.slice(0,10)
+}
+function redditQueries(region:string,needs:string[]){
+  const geo=region&&region!=="global"?" "+region:"";
+  const q:string[]=[];
+  const add=(x:string)=>{if(!q.includes(x))q.push(x)};
+  if(needs.includes("partner")){add("looking for someone in Japan"+geo);add("Japan sourcing partner"+geo)}
+  if(needs.includes("supplier")){add("Japanese supplier wanted"+geo);add("looking for Japanese supplier"+geo)}
+  if(needs.includes("buy")){add("need someone in Japan buy"+geo);add("buy from Japan proxy"+geo)}
+  if(needs.includes("find"))add("looking for item in Japan"+geo);
+  if(needs.includes("consolidate"))add("Japan consolidate shipping"+geo);
+  if(!q.length)add("looking for someone in Japan");
+  return q.slice(0,4)
+}
 function platform(url:string){try{const u=new URL(url),h=u.hostname.toLowerCase(),p=u.pathname;if(h.includes("reddit.com"))return"Reddit";if(h.endsWith("linkedin.com")&&p.startsWith("/posts/"))return"LinkedIn 公開投稿";if((h==="x.com"||h.endsWith("twitter.com"))&&p.includes("/status/"))return"X 公開投稿"}catch{}return"Web"}
 async function tavily(query:string,hint:string){const r=await fetch("https://api.tavily.com/search",{method:"POST",headers:{"content-type":"application/json","X-Tavily-Access-Mode":"keyless"},body:JSON.stringify({query,max_results:8,search_depth:"advanced"})});if(!r.ok)throw Error("search");const x=await r.json()as{results?:Array<{title?:string;content?:string;url?:string}>};return(x.results??[]).filter(v=>v.url).map(v=>({title:v.title??"公開情報",excerpt:(v.content??v.title??"").slice(0,900),display_name:(v.title??"公開情報").slice(0,180),url:v.url!,source_platform:platform(v.url!),source_type_hint:hint}as Raw))}
 async function reddit(q:string){
@@ -46,6 +91,29 @@ async function reddit(q:string){
   }catch{
     return[];
   }
+}
+function buyerSideFallback(items:Raw[]){
+  const want=/(looking for|seeking|need |needed|wanted|searching for|can someone|trying to find|looking to buy|buying requirement|rfq|supplier wanted)/i;
+  const offer=/(we offer|i offer|our service|we provide|proxy service available|personal shopper service|sourcing service|buying agent service|contact us|we can help|fiverr)/i;
+  const japan=/(japan|japanese|tokyo|osaka)/i;
+  const seen=new Set<string>();
+  return items.filter(x=>{
+    const s=(x.title+" "+x.excerpt).replace(/\s+/g," ");
+    return japan.test(s)&&want.test(s)&&!offer.test(s)&&!seen.has(x.url)&&seen.add(x.url)
+  }).slice(0,12).map(x=>({
+    ...x,
+    source_type:x.source_type_hint==="buying_lead"?"buying_lead":"explicit_demand",
+    country:"不明",
+    buyer_type:"要確認",
+    need_types:[],
+    requested_item:"要確認",
+    repeat_signal:"不明",
+    commercial_scale:"不明",
+    contact_route:x.source_platform==="Reddit"?"Reddit":"元URLから確認",
+    published_at:"不明",
+    evidence_summary:x.excerpt,
+    evidence_status:"要注意"
+  }))
 }
 async function judge(e:Env,items:Raw[],target:string){
   if(!items.length)return[];
@@ -70,44 +138,47 @@ async function judge(e:Env,items:Raw[],target:string){
     const out=JSON.parse(clean(a.response))as{candidates?:Array<any>};
     return(out.candidates??[]).map(c=>items[c.i]?{...items[c.i],...c}:null).filter(Boolean)as any[];
   }catch{
-    return[];
+    return buyerSideFallback(items);
   }
 }
 async function searchAll(r:Request,e:Env){
   const b=await r.json()as{region?:string;target?:string;needs?:string[]};
-  const qs=intentQueries(b.region||"global",b.needs||Object.keys(needLabels));
+  const needs=b.needs||Object.keys(needLabels);
+  const qs=intentQueries(b.region||"global",needs);
+  const rqs=redditQueries(b.region||"global",needs);
   const available=await countAvailable(e.DB);
   if(available<1)return json({error:"本日のWeb検索上限（10回）に達しました。明日また実行できます。"},429);
 
   const usedToday=await usageToday(e.DB);
-  const maxWeb=Math.min(3,available);
-  const startAt=qs.length?usedToday%qs.length:0;
-  const selected:string[]=[];
-  for(let i=0;i<maxWeb&&i<qs.length;i++)selected.push(qs[(startAt+i)%qs.length]);
-
+  const slots=Math.min(3,available);
   const all:Raw[]=[];
+  const selected:string[]=[];
+
+  // Two buyer-language web queries, rotated across the day.
+  const normalSlots=Math.min(2,slots);
+  const startAt=qs.length?usedToday%qs.length:0;
+  for(let i=0;i<normalSlots&&i<qs.length;i++)selected.push(qs[(startAt+i)%qs.length]);
   for(const q of selected)all.push(...await tavily(q,"explicit_demand"));
-  if(selected.length)await addUsage(e.DB,selected.length);
 
-  // Reddit uses its own public search endpoint and does not consume the Tavily daily counter.
-  for(const q of selected.slice(0,2))all.push(...await reddit(q));
-
-  // Every second run, use one of the 3 Web slots for a concrete B2B buying lead query.
-  // This keeps total Web usage capped at 3 per click.
-  if(usedToday>=3 && selected.length>0){
-    const buying=await tavily('site:exporthub.com OR site:tradekey.com OR site:ec21.com OR site:go4worldbusiness.com "Japan" ("looking to buy" OR "buying requirement" OR RFQ)',"buying_lead");
-    all.push(...buying);
-    // Count the extra buying-lead query only if there is remaining allowance.
-    if(await countAvailable(e.DB)>0)await addUsage(e.DB,1);
+  // Use the third slot for a concrete B2B buying-lead search.
+  let webUsed=selected.length;
+  if(slots>=3){
+    all.push(...await tavily('site:exporthub.com OR site:tradekey.com OR site:ec21.com OR site:go4worldbusiness.com Japan ("looking to buy" OR "buying requirement" OR RFQ OR "supplier wanted")',"buying_lead"));
+    webUsed++;
   }
+  if(webUsed)await addUsage(e.DB,webUsed);
+
+  // Reddit uses its own endpoint and simple Reddit-friendly queries.
+  for(const q of rqs.slice(0,3))all.push(...await reddit(q));
 
   const seen=new Set<string>();
   const dedup=all.filter(x=>x.url&&!seen.has(x.url)&&seen.add(x.url));
   const candidates=await judge(e,dedup,b.target||"business_priority");
+
   return json({
     candidates,
     remaining_searches:Math.max(0,await countAvailable(e.DB)),
-    query_rotation:{used:selected.length,start:startAt}
+    diagnostics:{raw_results:all.length,deduped:dedup.length,kept:candidates.length,web_queries:webUsed,reddit_queries:Math.min(3,rqs.length)}
   })
 }
 async function createLead(r:Request,e:Env){const b=await r.json()as any;if(!b.url||!b.excerpt)return json({error:"候補情報が不足しています。"},400);const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(b.url)),key=Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,"0")).join("");if(await e.DB.prepare("SELECT id FROM sourcing_leads WHERE duplicate_key=?").bind(key).first())return json({error:"この情報は既に接触候補へ追加されています。"},409);const t=now(),signal=id(),lead=id();await e.DB.batch([e.DB.prepare("INSERT INTO sourcing_signals (id,public_url,source_platform,source_type,published_at,display_name,evidence_excerpt,country,buyer_type,need_types,requested_item,repeat_signal,commercial_scale,contact_route,evidence_summary,evidence_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(signal,b.url,b.source_platform||"Web",b.source_type||"explicit_demand",b.published_at||"不明",b.display_name||b.title||"公開情報",b.excerpt,b.country||"不明",b.buyer_type||"不明",JSON.stringify(b.need_types||[]),b.requested_item||"不明",b.repeat_signal||"不明",b.commercial_scale||"不明",b.contact_route||"不明",b.evidence_summary||b.excerpt,b.evidence_status||"要確認",t,t),e.DB.prepare("INSERT INTO sourcing_leads (id,signal_id,display_name,country,public_url,evidence_excerpt,evidence_summary,requested_item,contact_route,duplicate_key,stage,human_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'reviewed','awaiting_review',?,?)").bind(lead,signal,b.display_name||b.title||"公開情報",b.country||"不明",b.url,b.excerpt,b.evidence_summary||b.excerpt,b.requested_item||"不明",b.contact_route||"不明",key,t,t),e.DB.prepare("INSERT INTO sourcing_events (id,lead_id,event_type,from_stage,to_stage,occurred_at) VALUES (?,?,'lead_created','signal_discovered','reviewed',?)").bind(id(),lead,t)]);return json({id:lead},201)}
