@@ -97,7 +97,11 @@ export const APP_JS = String.raw`(() => {
       });
       const x=await jsonResponse(r), d=x.diagnostics||{};
       const list=Array.isArray(x.candidates)?x.candidates:[];
-      if(msg)msg.textContent="検索完了。条件一致 "+list.length+"件 / 取得 "+(d.raw_results??"-")+"件。Web検索残り："+(x.remaining_searches??"-")+" / 10"+(d.query_errors?.length?"（一部検索エラー）":"");
+      if(msg){
+        const warning=d.source_coverage_missing?"。この地域の情報源は未登録です。":d.source_errors?.length?"。取得に失敗した情報源があります。":"";
+        msg.textContent="検索完了。個別案件URL "+(d.individual_links??0)+"件 / 原文確認 "+(d.detail_checked??0)+
+          "件 / 合格 "+list.length+"件。Web検索枠残り："+(x.remaining_searches??"-")+" / 10（今回消費0）"+warning;
+      }
       render(list);
     }catch(error){
       if(msg)msg.textContent=error?.message||"検索できませんでした。";
