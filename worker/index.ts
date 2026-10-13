@@ -1,3 +1,4 @@
+import { eligibleFeeds, listCandidates, detailEvidence } from "./rfq_catalog.mjs";
 import { parseTradeLead } from "./buyer_leads.mjs";
 import { APP_JS } from "./app";
 type Stmt={all<T>():Promise<{results:T[]}>;bind(...x:unknown[]):{first<T>():Promise<T|null>;run():Promise<unknown>}};
@@ -134,44 +135,69 @@ async function judge(e:Env,items:Raw[],target:string){
 }
 async function searchAll(r:Request,e:Env){
   const b=await r.json()as{region?:string;target?:string;needs?:string[]};
-  const available=await countAvailable(e.DB);
-  if(available<1)return json({error:"本日のWeb検索上限（10回）に達しました。明日また実行できます。"},429);
   const region=b.region||"global";
-  const usage=await usageToday(e.DB);
-  // Two focused buyer-side RFQ searches. A third slot is never spent automatically.
-  // The first searches any product; the second rotates to diversify actual buy leads.
-  const topics=["Japanese","Used Machinery","Food","Auto Parts","Industrial Equipment","Seafood","Daily Goods","Used Vehicles","Electrical Equipment","Consumer Products"];
-  const topic=topics[(Math.floor(Date.now()/86400000)+usage)%topics.length];
-  const queries=[
-    'site:go4worldbusiness.com/buylead/view/ "Looking for suppliers from: Japan" "Quantity Required" "Wanted"',
-    'site:go4worldbusiness.com/buylead/view/ "Looking for suppliers from" "Japan" "Buyer From" "'+topic+'"'
-  ].slice(0,Math.min(available,2));
-  const all:Raw[]=[];
-  const queryErrors:string[]=[];
-  for(const q of queries){
-    try{all.push(...await tavily(q,"buying_lead"))}
-    catch(e){queryErrors.push(String(e).slice(0,130))}
-    // Count attempted Tavily operations, including failed provider requests.
-    await addUsage(e.DB,1);
+  const feeds=eligibleFeeds(region);
+  const remaining=Math.max(0,await countAvailable(e.DB));
+  const today=day(),sourceErrors:string[]=[];
+  if(!feeds.length)return json({
+    candidates:[],remaining_searches:remaining,
+    diagnostics:{raw_results:0,source_catalogs:0,source_markets:[],individual_links:0,
+      prequalified:0,detail_checked:0,qualified_buying_leads:0,web_queries:0,
+      source_coverage_missing:true,source_errors:["この地域の買付案件ソースはまだ登録されていません。"]}
+  });
+  const approved:any[]=[],prequalified:any[]=[];
+  const reasons:Record<string,number>={};
+  let totalLinks=0,catalogs=0,detailChecked=0;
+  const seen=new Set<string>();
+  // Public category listings are discovery indexes. Never label the listing itself
+  // as a buyer. Fetch the linked individual RFQ before showing it as a candidate.
+  for(const feed of feeds){
+    try{
+      const r=await fetch(feed.url,{headers:{accept:"text/html"},signal:AbortSignal.timeout(12000)});
+      if(!r.ok){sourceErrors.push(feed.market+" : HTTP "+r.status);continue;}
+      const h=await r.text();
+      const parsed=listCandidates(feed.url,h,{region,today});
+      catalogs++;totalLinks+=parsed.links_seen;
+      for(const [why,n] of Object.entries(parsed.excluded))reasons[why]=(reasons[why]||0)+Number(n);
+      for(const c of parsed.candidates){
+        if(seen.has(c.url))continue;
+        seen.add(c.url);prequalified.push({...c,market:feed.market});
+      }
+    }catch(error){sourceErrors.push(feed.market+" : "+String(error).slice(0,100));}
   }
-  const seen=new Set<string>(), rejected:Record<string,number>={};
-  const candidates:any[]=[];
-  for(const row of all){
-    if(!row.url||seen.has(row.url))continue;
-    seen.add(row.url);
-    const result=parseTradeLead(row,{region,today:day()}) as any;
-    if(result.candidate)candidates.push(result.candidate);
-    else rejected[result.reason||"insufficient_evidence"]=(rejected[result.reason||"insufficient_evidence"]||0)+1;
+  // Limit requests to the source; spread the 12 details over different markets.
+  const perMarket=new Map<string,number>();
+  const queue=prequalified.filter(c=>{
+    const n=perMarket.get(c.market)||0;
+    if(n>=4)return false;
+    perMarket.set(c.market,n+1);return true;
+  }).slice(0,12);
+  for(const row of queue){
+    try{
+      const r=await fetch(row.url,{headers:{accept:"text/html"},signal:AbortSignal.timeout(12000)});
+      if(!r.ok){reasons["detail_http_"+r.status]=(reasons["detail_http_"+r.status]||0)+1;continue;}
+      const h=await r.text();
+      detailChecked++;
+      const result=parseTradeLead(detailEvidence(row.url,h),{region,today}) as any;
+      if(result.candidate){
+        const entry=result.candidate;
+        entry.source_platform="go4WorldBusiness / Buy Lead";
+        approved.push(entry);
+      }else reasons[result.reason||"details_insufficient"]=(reasons[result.reason||"details_insufficient"]||0)+1;
+    }catch(error){
+      reasons["detail_fetch_failed"]=(reasons["detail_fetch_failed"]||0)+1;
+      sourceErrors.push("個別案件取得失敗："+String(error).slice(0,80));
+    }
   }
-  // Never use keyword-only or AI-only fallback to manufacture commercial leads.
-  // Individual Reddit posts remain outside this commercial RFQ search.
   return json({
-    candidates,
-    remaining_searches:Math.max(0,await countAvailable(e.DB)),
+    candidates:approved,remaining_searches:remaining,
     diagnostics:{
-      raw_results:all.length,unique_urls:seen.size,
-      qualified_buying_leads:candidates.length,excluded_by_reason:rejected,
-      web_queries:queries.length,query_errors:queryErrors,source_family:"individual B2B buy leads"
+      raw_results:totalLinks,source_catalogs:catalogs,
+      source_markets:[...new Set(feeds.map(f=>f.market))],
+      individual_links:totalLinks,prequalified:prequalified.length,
+      detail_checked:detailChecked,qualified_buying_leads:approved.length,
+      excluded_by_reason:reasons,source_errors:sourceErrors,
+      web_queries:0,source_family:"public individual B2B RFQ pages"
     }
   });
 }
@@ -184,4 +210,4 @@ async function ensureSourcingSchema(db:DB){
 }
 async function createLead(r:Request,e:Env){const b=await r.json()as any;if(!b.url||!b.excerpt)return json({error:"候補情報が不足しています。"},400);const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(b.url)),key=Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,"0")).join("");if(await e.DB.prepare("SELECT id FROM sourcing_leads WHERE duplicate_key=?").bind(key).first())return json({error:"この情報は既に接触候補へ追加されています。"},409);const t=now(),signal=id(),lead=id();await e.DB.batch([e.DB.prepare("INSERT INTO sourcing_signals (id,public_url,source_platform,source_type,published_at,display_name,evidence_excerpt,country,buyer_type,need_types,requested_item,repeat_signal,commercial_scale,contact_route,evidence_summary,evidence_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(signal,b.url,b.source_platform||"Web",b.source_type||"explicit_demand",b.published_at||"不明",b.display_name||b.title||"公開情報",b.excerpt,b.country||"不明",b.buyer_type||"不明",JSON.stringify(b.need_types||[]),b.requested_item||"不明",b.repeat_signal||"不明",b.commercial_scale||"不明",b.contact_route||"不明",b.evidence_summary||b.excerpt,b.evidence_status||"要確認",t,t),e.DB.prepare("INSERT INTO sourcing_leads (id,signal_id,display_name,country,public_url,evidence_excerpt,evidence_summary,requested_item,contact_route,duplicate_key,stage,human_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'reviewed','awaiting_review',?,?)").bind(lead,signal,b.display_name||b.title||"公開情報",b.country||"不明",b.url,b.excerpt,b.evidence_summary||b.excerpt,b.requested_item||"不明",b.contact_route||"不明",key,t,t),e.DB.prepare("INSERT INTO sourcing_events (id,lead_id,event_type,from_stage,to_stage,occurred_at) VALUES (?,?,'lead_created','signal_discovered','reviewed',?)").bind(id(),lead,t)]);return json({id:lead},201)}
 async function setStage(r:Request,e:Env,leadId:string){const b=await r.json()as{stage?:string},allowed=["reviewed","contact_ready","contacted","replied","sourcing_request","quote","paid","repeat","larger_order"];if(!b.stage||!allowed.includes(b.stage))return json({error:"無効なステージです。"},400);const old=await e.DB.prepare("SELECT stage FROM sourcing_leads WHERE id=?").bind(leadId).first<{stage:string}>();if(!old)return json({error:"候補が見つかりません。"},404);const t=now();await e.DB.batch([e.DB.prepare("UPDATE sourcing_leads SET stage=?,updated_at=? WHERE id=?").bind(b.stage,t,leadId),e.DB.prepare("INSERT INTO sourcing_events (id,lead_id,event_type,from_stage,to_stage,occurred_at) VALUES (?,?,'stage_changed',?,?,?)").bind(id(),leadId,old.stage,b.stage,t)]);return json({ok:true})}
-export default{async fetch(r:Request,e:Env){const u=new URL(r.url);if(r.method==="GET"&&u.pathname==="/")return new Response(html,{headers:{"content-type":"text/html;charset=utf-8"}});if(r.method==="GET"&&u.pathname==="/app.js")return new Response(APP_JS,{headers:{"content-type":"application/javascript;charset=utf-8","cache-control":"no-store"}});if(r.method==="POST"&&u.pathname==="/api/search"){try{return await searchAll(r,e)}catch{return json({error:"公開情報検索を実行できませんでした。"},503)}}if(r.method==="GET"&&u.pathname==="/api/health")return json({ok:true,version:"buyer-rfq-v1",ui_version:"search-button-fixed-20261013",scope:"overseas buyers seeking suppliers from Japan",max_web_queries_per_click:2});if(r.method==="GET"&&u.pathname==="/api/leads"){await ensureSourcingSchema(e.DB);const x=await e.DB.prepare("SELECT id,display_name,country,public_url,evidence_excerpt,evidence_summary,requested_item,contact_route,stage FROM sourcing_leads ORDER BY updated_at DESC LIMIT 100").all();return json(x.results)}if(r.method==="POST"&&u.pathname==="/api/leads"){await ensureSourcingSchema(e.DB);return createLead(r,e);}const m=u.pathname.match(/^\/api\/leads\/([^/]+)\/stage$/);if(r.method==="POST"&&m){await ensureSourcingSchema(e.DB);return setStage(r,e,m[1]);}return json({error:"not_found"},404)}};
+export default{async fetch(r:Request,e:Env){const u=new URL(r.url);if(r.method==="GET"&&u.pathname==="/")return new Response(html,{headers:{"content-type":"text/html;charset=utf-8"}});if(r.method==="GET"&&u.pathname==="/app.js")return new Response(APP_JS,{headers:{"content-type":"application/javascript;charset=utf-8","cache-control":"no-store"}});if(r.method==="POST"&&u.pathname==="/api/search"){try{return await searchAll(r,e)}catch{return json({error:"公開情報検索を実行できませんでした。"},503)}}if(r.method==="GET"&&u.pathname==="/api/health")return json({ok:true,version:"buyer-rfq-catalog-v2",ui_version:"search-button-fixed-20261013",scope:"individual overseas buyer RFQs from public trade listings",max_web_queries_per_click:0});if(r.method==="GET"&&u.pathname==="/api/leads"){await ensureSourcingSchema(e.DB);const x=await e.DB.prepare("SELECT id,display_name,country,public_url,evidence_excerpt,evidence_summary,requested_item,contact_route,stage FROM sourcing_leads ORDER BY updated_at DESC LIMIT 100").all();return json(x.results)}if(r.method==="POST"&&u.pathname==="/api/leads"){await ensureSourcingSchema(e.DB);return createLead(r,e);}const m=u.pathname.match(/^\/api\/leads\/([^/]+)\/stage$/);if(r.method==="POST"&&m){await ensureSourcingSchema(e.DB);return setStage(r,e,m[1]);}return json({error:"not_found"},404)}};
