@@ -7,9 +7,7 @@ export const APP_JS = String.raw`
   function t(tag,value,cls){const el=document.createElement(tag);if(cls)el.className=cls;el.textContent=value??'';return el}
   function field(parent,label,value){const box=document.createElement('div');box.appendChild(t('b',label));box.appendChild(document.createElement('br'));box.appendChild(document.createTextNode(value||'不明'));parent.appendChild(box)}
   function renderStats(list){
-    const counts={explicit_demand:0,buying_lead:0,existing_importer:0,source_urls:0};
-    list.forEach(c=>{if(counts[c.source_type]!==undefined)counts[c.source_type]++;if(c.url&&/^https?:\/\//.test(c.url))counts.source_urls++});
-    const data=[['直接需要',counts.explicit_demand],['買付案件',counts.buying_lead],['既存輸入企業',counts.existing_importer],['原文URLあり',counts.source_urls]];
+    const data=[['合格した買付案件',list.length],['元URLあり',list.filter(c=>c.url&&/^https?:\\/\\//.test(c.url)).length],['連絡方法確認済み',0],['確認待ち',list.length]];
     const root=q('#stats');root.innerHTML='';
     data.forEach(([name,n])=>{const box=document.createElement('div');box.className='stat';box.appendChild(t('span',name));box.appendChild(t('b',String(n)));root.appendChild(box)})
   }
@@ -28,7 +26,7 @@ export const APP_JS = String.raw`
     });
   }
   async function runSearch(){
-    const btn=q('#search'),msg=q('#msg');const needs=qa('input[name=need]:checked').map(x=>x.value);
+    const btn=q('#search'),msg=q('#msg');const needs=['supplier'];
     btn.disabled=true;msg.textContent='公開情報を検索し、内容を整理しています…';q('#results').innerHTML='<p class="small">検索中です。</p>';
     try{
       const r=await fetch('/api/search',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({region:q('#region').value,target:q('#target').value,needs})});
