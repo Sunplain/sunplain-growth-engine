@@ -1,43 +1,166 @@
-export const APP_JS = String.raw`
-(function(){
-  const q=(s)=>document.querySelector(s);
-  const qa=(s)=>Array.from(document.querySelectorAll(s));
-  const typeLabels={explicit_demand:'直接需要',buying_lead:'買付案件',existing_importer:'既存輸入企業'};
-  let current=[];
-  function t(tag,value,cls){const el=document.createElement(tag);if(cls)el.className=cls;el.textContent=value??'';return el}
-  function field(parent,label,value){const box=document.createElement('div');box.appendChild(t('b',label));box.appendChild(document.createElement('br'));box.appendChild(document.createTextNode(value||'不明'));parent.appendChild(box)}
-  function renderStats(list){
-    const data=[['合格した買付案件',list.length],['元URLあり',list.filter(c=>c.url&&/^https?:\\/\\//.test(c.url)).length],['継続発注の記載',list.filter(c=>String(c.repeat_signal||'').includes('言及')).length],['確認待ち',list.length]];
-    const root=q('#stats');root.innerHTML='';
-    data.forEach(([name,n])=>{const box=document.createElement('div');box.className='stat';box.appendChild(t('span',name));box.appendChild(t('b',String(n)));root.appendChild(box)})
+export const APP_JS = String.raw`(() => {
+  "use strict";
+  const q = s => document.querySelector(s);
+  const qa = s => Array.from(document.querySelectorAll(s));
+  const typeLabel = { explicit_demand:"直接需要", buying_lead:"買付案件", existing_importer:"既存輸入企業" };
+  const stageLabel = {
+    reviewed:"確認済み", contact_ready:"接触可能", contacted:"接触済み",
+    replied:"返信あり", sourcing_request:"調達依頼", quote:"見積提示",
+    paid:"入金", repeat:"再注文", larger_order:"取引拡大"
+  };
+  const stages = Object.keys(stageLabel);
+  let found = [];
+  let searching = false;
+
+  function node(tag, value, cls) {
+    const el = document.createElement(tag);
+    if(cls) el.className=cls;
+    if(value!==undefined && value!==null) el.textContent=String(value);
+    return el;
   }
-  function render(list){
-    current=list;renderStats(list);const root=q('#results');root.innerHTML='';
-    if(!list.length){root.appendChild(t('p','根拠のある候補は見つかりませんでした。','small'));return}
-    list.forEach((c,i)=>{
-      const card=document.createElement('div');card.className='card';
-      card.appendChild(t('div',(c.source_platform||'Web')+' · '+(typeLabels[c.source_type]||c.source_type||'要確認'),'small'));
-      card.appendChild(t('h3',(c.country||'地域不明')+'｜'+(c.requested_item||c.title||'内容不明')));
-      const p=document.createElement('p');p.appendChild(t('b','公開情報から確認できる内容'));p.appendChild(document.createElement('br'));p.appendChild(document.createTextNode(c.evidence_summary||c.excerpt||''));card.appendChild(p);
-      const chips=document.createElement('div');(c.need_types||[]).concat([c.repeat_signal||'継続性不明',c.commercial_scale||'規模不明']).forEach(v=>chips.appendChild(t('span',v,'chip')));card.appendChild(chips);
-      const meta=document.createElement('div');meta.className='meta';field(meta,'相手',c.buyer_type);field(meta,'接触方法',c.contact_route);field(meta,'公開日',c.published_at);field(meta,'Evidence',c.evidence_status);card.appendChild(meta);
-      const a=t('a','元の情報を確認');a.href=c.url;a.target='_blank';a.rel='noopener';card.appendChild(a);card.appendChild(document.createTextNode('　'));
-      const btn=t('button','接触候補に追加','secondary');btn.addEventListener('click',()=>addLead(i));card.appendChild(btn);root.appendChild(card);
+  function metaField(parent, label, value) {
+    const el = node("div");
+    el.append(node("b",label),document.createElement("br"),document.createTextNode(String(value || "不明")));
+    parent.append(el);
+  }
+  function safeUrl(value){
+    const s=String(value||"").trim();
+    return s.startsWith("https://") || s.startsWith("http://") ? s : null;
+  }
+  function sourceLink(url,label){
+    const v=safeUrl(url);
+    if(!v)return node("span","元URL未確認","small");
+    const a=node("a",label);
+    a.href=v;a.target="_blank";a.rel="noopener noreferrer";
+    return a;
+  }
+  function stats(list) {
+    const data=[
+      ["合格した買付案件",list.length],
+      ["元URLあり",list.filter(x=>safeUrl(x.url)).length],
+      ["継続発注の記載",list.filter(x=>String(x.repeat_signal||"").includes("言及")).length],
+      ["確認待ち",list.length]
+    ];
+    const root=q("#stats");if(!root)return;
+    root.replaceChildren();
+    data.forEach(([name,n])=>{
+      const cell=node("div",undefined,"stat");
+      cell.append(node("span",name),node("b",n));
+      root.append(cell);
     });
   }
+  function render(list) {
+    found=list;stats(list);
+    const root=q("#results");if(!root)return;
+    root.replaceChildren();
+    if(!list.length){root.append(node("p","条件を満たす買付案件は見つかりませんでした。","small"));return;}
+    list.forEach((c,i)=>{
+      const card=node("div",undefined,"card");
+      card.append(node("div", (c.source_platform||"Web")+" · "+(typeLabel[c.source_type]||"確認候補"),"small"));
+      card.append(node("h3",(c.country||"地域不明")+"｜"+(c.requested_item||c.title||"内容不明")));
+      const detail=node("p");
+      detail.append(node("b","公開情報から確認できる内容"),document.createElement("br"),document.createTextNode(String(c.evidence_summary||c.excerpt||"")));
+      card.append(detail);
+      const chips=node("div");
+      const needs=Array.isArray(c.need_types)?c.need_types:[];
+      [...needs,c.repeat_signal||"継続性不明",c.commercial_scale||"規模不明"].forEach(v=>chips.append(node("span",v,"chip")));
+      card.append(chips);
+      const meta=node("div",undefined,"meta");
+      metaField(meta,"相手",c.buyer_type);
+      metaField(meta,"接触方法",c.contact_route);
+      metaField(meta,"公開日",c.published_at);
+      metaField(meta,"Evidence",c.evidence_status);
+      card.append(meta);
+      card.append(sourceLink(c.url,"元の情報を確認"),document.createTextNode("　"));
+      const button=node("button","接触候補に追加","secondary");
+      button.addEventListener("click",()=>addLead(i));
+      card.append(button);
+      root.append(card);
+    });
+  }
+  async function jsonResponse(r) {
+    const x=await r.json().catch(()=>({error:"サーバーから正しい応答を取得できませんでした。"}));
+    if(!r.ok)throw Error(x.error||"通信に失敗しました。");
+    return x;
+  }
   async function runSearch(){
-    const btn=q('#search'),msg=q('#msg');const needs=['supplier'];
-    btn.disabled=true;msg.textContent='公開情報を検索し、内容を整理しています…';q('#results').innerHTML='<p class="small">検索中です。</p>';
+    if(searching)return;
+    searching=true;
+    const btn=q("#search"),msg=q("#msg"),results=q("#results");
+    if(btn)btn.disabled=true;
+    if(msg)msg.textContent="公開買付案件を検索しています…";
+    if(results)results.replaceChildren(node("p","検索中です。","small"));
     try{
-      const r=await fetch('/api/search',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({region:q('#region').value,target:q('#target').value,needs})});
-      const x=await r.json();if(!r.ok)throw new Error(x.error||'検索に失敗しました。');
-      const n=(x.candidates||[]).length;const d=x.diagnostics||{};msg.textContent='検索完了。条件一致 '+n+' 件 / 取得 '+(d.raw_results??'-')+' 件。Web検索残り：'+(x.remaining_searches??'-')+' / 10'+(d.query_errors?.length?'（検索サービスの一部でエラー）':'');render(x.candidates||[]);
-    }catch(e){msg.textContent=e.message||'検索に失敗しました。';q('#results').innerHTML=''}finally{btn.disabled=false}
+      const r=await fetch("/api/search",{
+        method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({region:q("#region")?.value||"global",target:q("#target")?.value||"business_priority",needs:["supplier"]})
+      });
+      const x=await jsonResponse(r), d=x.diagnostics||{};
+      const list=Array.isArray(x.candidates)?x.candidates:[];
+      if(msg)msg.textContent="検索完了。条件一致 "+list.length+"件 / 取得 "+(d.raw_results??"-")+"件。Web検索残り："+(x.remaining_searches??"-")+" / 10"+(d.query_errors?.length?"（一部検索エラー）":"");
+      render(list);
+    }catch(error){
+      if(msg)msg.textContent=error?.message||"検索できませんでした。";
+      if(results)results.replaceChildren(node("p","検索は完了していません。","small"));
+    }finally{
+      searching=false;
+      if(btn)btn.disabled=false;
+    }
   }
   async function addLead(i){
-    const r=await fetch('/api/leads',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(current[i])});
-    const x=await r.json();alert(r.ok?'接触候補に追加しました。':(x.error||'追加できませんでした。'));if(r.ok&&typeof window.load==='function')await window.load();
+    try{
+      const r=await fetch("/api/leads",{
+        method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify(found[i])
+      });
+      await jsonResponse(r);
+      alert("接触候補に追加しました。");
+      await loadLeads();
+    }catch(error){alert(error?.message||"接触候補を追加できませんでした。");}
   }
-  const btn=q('#search');if(btn){btn.addEventListener('click',runSearch);btn.style.pointerEvents='auto';btn.disabled=false}
-})();
-`;
+  async function changeStage(id,stage){
+    if(!stage)return;
+    try{
+      const r=await fetch("/api/leads/"+encodeURIComponent(id)+"/stage",{
+        method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({stage})
+      });
+      await jsonResponse(r);await loadLeads();
+    }catch(error){alert(error?.message||"ステージの変更に失敗しました。");}
+  }
+  async function loadLeads(){
+    const leadRoot=q("#leads"),pipeRoot=q("#pipeline");
+    if(!leadRoot||!pipeRoot)return;
+    try{
+      const r=await fetch("/api/leads");
+      const records=await jsonResponse(r);
+      if(!Array.isArray(records))throw Error("接触候補データが不正です。");
+      pipeRoot.replaceChildren();
+      stages.forEach(stage=>{
+        const el=node("div",undefined,"stage");
+        el.append(node("span",stageLabel[stage]),node("b",records.filter(x=>x.stage===stage).length));
+        pipeRoot.append(el);
+      });
+      leadRoot.replaceChildren();
+      if(!records.length)leadRoot.append(node("p","まだ接触候補はありません。","small"));
+      records.forEach(c=>{
+        const card=node("div",undefined,"card");
+        card.append(node("h3",(c.country||"地域不明")+"｜"+(c.requested_item||c.display_name||"内容不明")));
+        card.append(node("p",c.evidence_summary||c.evidence_excerpt||""));
+        card.append(sourceLink(c.public_url,"元情報を確認"));
+        card.append(node("p","現在："+(stageLabel[c.stage]||c.stage||"要確認")));
+        const select=node("select");
+        select.append(node("option","ステージ変更"));
+        select.options[0].value="";
+        stages.forEach(s=>{const opt=node("option",stageLabel[s]);opt.value=s;select.append(opt);});
+        select.addEventListener("change",()=>changeStage(c.id,select.value));
+        card.append(select);leadRoot.append(card);
+      });
+    }catch(error){
+      leadRoot.replaceChildren(node("p","接触候補の読み込みに失敗しました："+(error?.message||"通信エラー"),"small"));
+    }
+  }
+  const btn=q("#search");
+  if(btn){btn.disabled=false;btn.addEventListener("click",runSearch);}
+  loadLeads();
+})();`;
