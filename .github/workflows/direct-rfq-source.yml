@@ -1,0 +1,21 @@
+name: Direct RFQ source verification
+on:
+  push:
+    branches: [recover-direct-overseas-buy-leads-20261013]
+  pull_request:
+    paths:
+      - 'worker/rfq_catalog.mjs'
+      - 'worker/index.ts'
+      - 'tests/rfq_catalog.test.mjs'
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      - run: npm run build
+      - run: node scripts/smoke_catalog.mjs
