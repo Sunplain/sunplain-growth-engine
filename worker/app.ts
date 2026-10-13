@@ -7,9 +7,7 @@ export const APP_JS = String.raw`
   function t(tag,value,cls){const el=document.createElement(tag);if(cls)el.className=cls;el.textContent=value??'';return el}
   function field(parent,label,value){const box=document.createElement('div');box.appendChild(t('b',label));box.appendChild(document.createElement('br'));box.appendChild(document.createTextNode(value||'不明'));parent.appendChild(box)}
   function renderStats(list){
-    const counts={explicit_demand:0,buying_lead:0,existing_importer:0,contact:0};
-    list.forEach(c=>{if(counts[c.source_type]!==undefined)counts[c.source_type]++;if(c.contact_route&&c.contact_route!=='不明')counts.contact++});
-    const data=[['直接需要',counts.explicit_demand],['買付案件',counts.buying_lead],['既存輸入企業',counts.existing_importer],['接触経路あり',counts.contact]];
+    const data=[['合格した買付案件',list.length],['元URLあり',list.filter(c=>c.url&&/^https?:\\/\\//.test(c.url)).length],['継続発注の記載',list.filter(c=>String(c.repeat_signal||'').includes('言及')).length],['確認待ち',list.length]];
     const root=q('#stats');root.innerHTML='';
     data.forEach(([name,n])=>{const box=document.createElement('div');box.className='stat';box.appendChild(t('span',name));box.appendChild(t('b',String(n)));root.appendChild(box)})
   }
@@ -28,17 +26,17 @@ export const APP_JS = String.raw`
     });
   }
   async function runSearch(){
-    const btn=q('#search'),msg=q('#msg');const needs=qa('input[name=need]:checked').map(x=>x.value);
+    const btn=q('#search'),msg=q('#msg');const needs=['supplier'];
     btn.disabled=true;msg.textContent='公開情報を検索し、内容を整理しています…';q('#results').innerHTML='<p class="small">検索中です。</p>';
     try{
       const r=await fetch('/api/search',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({region:q('#region').value,target:q('#target').value,needs})});
       const x=await r.json();if(!r.ok)throw new Error(x.error||'検索に失敗しました。');
-      msg.textContent='検索完了。Web検索残り：'+(x.remaining_searches??'-')+' / 10';render(x.candidates||[]);
+      const n=(x.candidates||[]).length;const d=x.diagnostics||{};msg.textContent='検索完了。条件一致 '+n+' 件 / 取得 '+(d.raw_results??'-')+' 件。Web検索残り：'+(x.remaining_searches??'-')+' / 10'+(d.query_errors?.length?'（検索サービスの一部でエラー）':'');render(x.candidates||[]);
     }catch(e){msg.textContent=e.message||'検索に失敗しました。';q('#results').innerHTML=''}finally{btn.disabled=false}
   }
   async function addLead(i){
     const r=await fetch('/api/leads',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(current[i])});
-    const x=await r.json();alert(r.ok?'接触候補に追加しました。':(x.error||'追加できませんでした。'));
+    const x=await r.json();alert(r.ok?'接触候補に追加しました。':(x.error||'追加できませんでした。'));if(r.ok&&typeof window.load==='function')await window.load();
   }
   const btn=q('#search');if(btn){btn.addEventListener('click',runSearch);btn.style.pointerEvents='auto';btn.disabled=false}
 })();

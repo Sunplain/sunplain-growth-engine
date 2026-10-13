@@ -1,3 +1,4 @@
+import { parseTradeLead } from "./buyer_leads.mjs";
 import { APP_JS } from "./app";
 type Stmt={all<T>():Promise<{results:T[]}>;bind(...x:unknown[]):{first<T>():Promise<T|null>;run():Promise<unknown>}};
 type DB={prepare(q:string):Stmt;batch(x:unknown[]):Promise<unknown>};
@@ -10,16 +11,12 @@ const needLabels:{[k:string]:string}={find:"日本で商品を探してほしい
 const html=[
 "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Sunplain Growth Engine</title>",
 "<style>body{margin:0;background:#f5f7f8;color:#1e2930;font:15px system-ui,-apple-system,sans-serif}main{max-width:1100px;margin:auto;padding:30px 18px 60px}h1{margin:4px 0 6px;font-size:32px}h2{margin-top:0}.tag{color:#415d73;font-weight:800;letter-spacing:.04em}.lead{color:#56636d}.small{font-size:13px;color:#6d7981}section{background:#fff;border:1px solid #dce3e7;border-radius:14px;padding:20px;margin:16px 0}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.checks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0 16px}.opt{border:1px solid #d8e0e5;border-radius:9px;padding:10px;background:#fafbfc}select{width:100%;padding:10px;border:1px solid #cfd8de;border-radius:8px;background:white;font:inherit}button{background:#405f76;color:white;border:0;border-radius:8px;padding:11px 15px;font-weight:750;cursor:pointer}.secondary{background:#eef2f4;color:#2c414f;border:1px solid #cfdae0}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0}.stat,.stage{background:#f4f7f9;border:1px solid #dbe3e8;border-radius:10px;padding:12px}.stat b,.stage b{display:block;font-size:22px}.card{border:1px solid #d8e1e6;border-radius:12px;padding:16px;margin:12px 0}.card h3{margin:2px 0 8px}.chip{display:inline-block;border:1px solid #cfdbe1;background:#f7f9fa;border-radius:20px;padding:4px 8px;margin:2px;font-size:12px}.meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0}.meta div{background:#f8fafb;border-radius:8px;padding:8px}.pipeline{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.stage{text-align:center}a{color:#315f7d}@media(max-width:760px){.grid,.checks,.stats,.pipeline,.meta{grid-template-columns:1fr}}</style>",
-"<main><div class=tag>JAPAN SOURCING DEMAND FINDER</div><h1>Sunplain Growth Engine</h1><p class=lead>日本から商品を調達・購入・受取・発送してくれる相手を探している公開情報を見つけ、接触候補として整理します。</p><p class=small>公開情報のみを使用します。最終判断は人が行います。</p>",
-"<section><h2>1. どんな需要を探しますか？</h2><div class=grid><div><b>対象地域</b><select id=region><option value=global>Global</option><option>North America</option><option>Latin America & Caribbean</option><option>Europe</option><option>East Asia</option><option>Southeast Asia</option><option>South Asia</option><option>Middle East</option><option>Africa</option><option>Central Asia</option><option>Oceania</option></select></div><div><b>対象</b><select id=target><option value=business_priority>法人・事業者を優先</option><option value=include_individual>個人を含む</option></select></div></div><p><b>探す需要</b></p><div class=checks>",
-"<label class=opt><input type=checkbox name=need value=find checked> 日本で商品を探してほしい</label><label class=opt><input type=checkbox name=need value=buy checked> 日本で代理購入してほしい</label><label class=opt><input type=checkbox name=need value=supplier checked> 日本の仕入先を探している</label><label class=opt><input type=checkbox name=need value=consolidate checked> 複数商品をまとめて発送してほしい</label><label class=opt><input type=checkbox name=need value=partner checked> 日本側の継続的な調達パートナーを探している</label>",
-"</div><button id=search>現在の需要を探す</button><p id=msg class=small></p></section>",
-"<section><h2>2. 発見した需要</h2><div id=stats class=stats><div class=stat><span>直接需要</span><b>0</b></div><div class=stat><span>買付案件</span><b>0</b></div><div class=stat><span>既存輸入企業</span><b>0</b></div><div class=stat><span>接触経路あり</span><b>0</b></div></div><div id=results><p class=small>まだ検索していません。</p></div></section>",
+"<main><div class=tag>JAPAN SOURCING DEMAND FINDER</div><h1>Sunplain Growth Engine</h1><p class=lead>海外から日本の供給者を探している個別の買付案件を、商品・数量・仕向国の根拠で選別します。</p><p class=small>公開情報のみを使用します。最終判断は人が行います。</p>",
+"<section><h2>1. 日本から買いたい海外の買い手を探す</h2><div class=grid><div><b>買い手の対象地域</b><select id=region><option value=global>Global</option><option>North America</option><option>Latin America & Caribbean</option><option>Europe</option><option>East Asia</option><option>Southeast Asia</option><option>South Asia</option><option>Middle East</option><option>Africa</option><option>Central Asia</option><option>Oceania</option></select></div><div><b>検索対象</b><select id=target><option value=business_priority>海外の具体的な買付案件（商品・数量・日本供給者希望）</option></select></div></div><p class=small>日本側のサプライヤー広告や、日本へ輸入する案件は除外します。個別買付案件の原文URLから、連絡条件と募集状況を確認してください。</p><button id=search>買付案件を探す</button><p id=msg class=small></p></section>",
+"<section><h2>2. 発見した需要</h2><div id=stats class=stats><div class=stat><span>直接需要</span><b>0</b></div><div class=stat><span>買付案件</span><b>0</b></div><div class=stat><span>既存輸入企業</span><b>0</b></div><div class=stat><span>元ページあり</span><b>0</b></div></div><div id=results><p class=small>まだ検索していません。</p></div></section>",
 "<section><h2>3. 接触候補</h2><div id=pipeline class=pipeline></div><div id=leads></div></section></main>",
 "<script>const $=s=>document.querySelector(s),E=s=>{const d=document.createElement('div');d.textContent=String(s??'');return d.innerHTML};let found=[];const typeLabel={explicit_demand:'直接需要',buying_lead:'買付案件',existing_importer:'既存輸入企業'},stageLabel={reviewed:'確認済み',contact_ready:'接触可能',contacted:'接触済み',replied:'返信あり',sourcing_request:'調達依頼',quote:'見積提示',paid:'入金',repeat:'再注文',larger_order:'取引拡大'},stages=Object.keys(stageLabel);",
-"function stats(cs){const n=t=>cs.filter(x=>x.source_type===t).length,contact=cs.filter(x=>x.contact_route&&x.contact_route!=='不明').length;$('#stats').innerHTML=[['直接需要',n('explicit_demand')],['買付案件',n('buying_lead')],['既存輸入企業',n('existing_importer')],['接触経路あり',contact]].map(x=>'<div class=stat><span>'+x[0]+'</span><b>'+x[1]+'</b></div>').join('')}",
 "function render(cs){found=cs;stats(cs);$('#results').innerHTML=cs.length?cs.map((c,i)=>'<div class=card><div class=small>'+E(c.source_platform)+' · '+E(typeLabel[c.source_type]||c.source_type)+'</div><h3>'+E(c.country||'地域不明')+'｜'+E(c.requested_item||c.title)+'</h3><p><b>公開情報から確認できる内容</b><br>'+E(c.evidence_summary||c.excerpt)+'</p><div>'+(c.need_types||[]).map(x=>'<span class=chip>'+E(x)+'</span>').join('')+'<span class=chip>'+E(c.repeat_signal||'継続性不明')+'</span><span class=chip>'+E(c.commercial_scale||'規模不明')+'</span></div><div class=meta><div><b>相手</b><br>'+E(c.buyer_type||'不明')+'</div><div><b>接触方法</b><br>'+E(c.contact_route||'不明')+'</div><div><b>公開日</b><br>'+E(c.published_at||'不明')+'</div><div><b>Evidence</b><br>'+E(c.evidence_status||'要確認')+'</div></div><a target=_blank rel=noopener href=\\\"'+E(c.url)+'\\\">元の情報を確認</a>　<button class=secondary onclick=\\\"addLead('+i+')\\\">接触候補に追加</button></div>').join(''):'<p class=small>根拠のある候補は見つかりませんでした。</p>'}",
-"$('#search').onclick=async()=>{const needs=[...document.querySelectorAll('input[name=need]:checked')].map(x=>x.value);$('#msg').textContent='公開情報を検索し、内容を整理しています…';$('#results').innerHTML='<p class=small>検索中です。</p>';const r=await fetch('/api/search',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({region:$('#region').value,target:$('#target').value,needs})}),x=await r.json();$('#msg').textContent=r.ok?('検索完了。Web検索残り：'+(x.remaining_searches??'-')+' / 10'):x.error;if(r.ok)render(x.candidates||[])};",
 "async function addLead(i){const r=await fetch('/api/leads',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(found[i])}),x=await r.json();alert(r.ok?'接触候補に追加しました。':x.error);load()}async function setStage(id,stage){if(!stage)return;await fetch('/api/leads/'+id+'/stage',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({stage})});load()}",
 "async function load(){const x=await(await fetch('/api/leads')).json();$('#pipeline').innerHTML=stages.map(s=>'<div class=stage><span>'+stageLabel[s]+'</span><b>'+x.filter(v=>v.stage===s).length+'</b></div>').join('');$('#leads').innerHTML=x.length?x.map(v=>'<div class=card><h3>'+E(v.country||'地域不明')+'｜'+E(v.requested_item||v.display_name)+'</h3><p>'+E(v.evidence_summary||v.evidence_excerpt)+'</p><a target=_blank rel=noopener href=\\\"'+E(v.public_url)+'\\\">元情報</a><p><b>現在：</b>'+E(stageLabel[v.stage]||v.stage)+'</p><select onchange=\\\"setStage(\\\\''+E(v.id)+'\\\\',this.value)\\\"><option value=\\\"\\\">ステージ変更</option>'+stages.map(s=>'<option value=\\\"'+s+'\\\">'+stageLabel[s]+'</option>').join('')+'</select></div>').join(''):'<p class=small>まだ接触候補はありません。</p>'}load();</script>",
 "<script src=/app.js></script>"
@@ -57,7 +54,21 @@ function redditSeeds(region:string,needs:string[]){
   return q.slice(0,4)
 }
 function platform(url:string){try{const u=new URL(url),h=u.hostname.toLowerCase(),p=u.pathname;if(h.includes("reddit.com"))return"Reddit";if(h.endsWith("linkedin.com")&&p.startsWith("/posts/"))return"LinkedIn 公開投稿";if((h==="x.com"||h.endsWith("twitter.com"))&&p.includes("/status/"))return"X 公開投稿"}catch{}return"Web"}
-async function tavily(query:string,hint:string){const r=await fetch("https://api.tavily.com/search",{method:"POST",headers:{"content-type":"application/json","X-Tavily-Access-Mode":"keyless"},body:JSON.stringify({query,max_results:8,search_depth:"advanced"})});if(!r.ok)throw Error("search");const x=await r.json()as{results?:Array<{title?:string;content?:string;url?:string}>};return(x.results??[]).filter(v=>v.url).map(v=>({title:v.title??"公開情報",excerpt:(v.content??v.title??"").slice(0,900),display_name:(v.title??"公開情報").slice(0,180),url:v.url!,source_platform:platform(v.url!),source_type_hint:hint}as Raw))}
+async function tavily(query:string,hint:string){
+  const r=await fetch("https://api.tavily.com/search",{
+    method:"POST",headers:{"content-type":"application/json","X-Tavily-Access-Mode":"keyless"},
+    body:JSON.stringify({query,max_results:12,search_depth:"advanced",include_raw_content:true,
+      include_domains:["go4worldbusiness.com"]})
+  });
+  if(!r.ok)throw Error("Tavily status "+r.status);
+  const x=await r.json()as{results?:Array<{title?:string;content?:string;raw_content?:string;url?:string}>};
+  return(x.results??[]).filter(v=>v.url).map(v=>({
+    title:v.title??"公開情報",
+    excerpt:(v.raw_content||v.content||v.title||"").slice(0,6000),
+    display_name:(v.title??"公開情報").slice(0,180),
+    url:v.url!,source_platform:platform(v.url!),source_type_hint:hint
+  } as Raw));
+}
 async function redditSubreddit(subreddit:string,q:string){
   try{
     const url="https://www.reddit.com/r/"+encodeURIComponent(subreddit)+"/search.json?restrict_sr=1&sort=new&limit=25&q="+encodeURIComponent(q);
@@ -127,50 +138,46 @@ async function judge(e:Env,items:Raw[],target:string){
 }
 async function searchAll(r:Request,e:Env){
   const b=await r.json()as{region?:string;target?:string;needs?:string[]};
-  const needs=b.needs||Object.keys(needLabels);
-  const region=b.region||"global";
   const available=await countAvailable(e.DB);
   if(available<1)return json({error:"本日のWeb検索上限（10回）に達しました。明日また実行できます。"},429);
-
-  const plan=demandQueries(region,needs);
+  const region=b.region||"global";
+  const usage=await usageToday(e.DB);
+  // Two focused buyer-side RFQ searches. A third slot is never spent automatically.
+  // The first searches any product; the second rotates to diversify actual buy leads.
+  const topics=["Japanese","Used Machinery","Food","Auto Parts","Industrial Equipment","Seafood","Daily Goods","Used Vehicles","Electrical Equipment","Consumer Products"];
+  const topic=topics[(Math.floor(Date.now()/86400000)+usage)%topics.length];
+  const queries=[
+    'site:go4worldbusiness.com/buylead/view/ "Looking for suppliers from: Japan" "Quantity Required" "Wanted"',
+    'site:go4worldbusiness.com/buylead/view/ "Looking for suppliers from" "Japan" "Buyer From" "'+topic+'"'
+  ].slice(0,Math.min(available,2));
   const all:Raw[]=[];
-  let webUsed=0;
-
-  // Mirror the research flow: one community search, one broad demand search,
-  // and one buyer/RFQ source search. Never spend more than 3 web slots.
-  const webPlan=[
-    {q:plan.community,h:"explicit_demand"},
-    {q:plan.broad,h:"explicit_demand"},
-    {q:plan.b2b,h:"buying_lead"}
-  ].slice(0,Math.min(3,available));
-
-  for(const p of webPlan){
-    all.push(...await tavily(p.q,p.h));
-    webUsed++;
+  const queryErrors:string[]=[];
+  for(const q of queries){
+    try{all.push(...await tavily(q,"buying_lead"))}
+    catch(e){queryErrors.push(String(e).slice(0,130))}
+    // Count attempted Tavily operations, including failed provider requests.
+    await addUsage(e.DB,1);
   }
-  if(webUsed)await addUsage(e.DB,webUsed);
-
-  // Zero-Tavily-cost discovery from the subreddits that repeatedly produce real requests.
-  const seeds=redditSeeds(region,needs);
-  for(const subreddit of ["ProxyJapan","internationalshopper"]){
-    for(const q of seeds.slice(0,2))all.push(...await redditSubreddit(subreddit,q));
+  const seen=new Set<string>(), rejected:Record<string,number>={};
+  const candidates:any[]=[];
+  for(const row of all){
+    if(!row.url||seen.has(row.url))continue;
+    seen.add(row.url);
+    const result=parseTradeLead(row,{region,today:day()}) as any;
+    if(result.candidate)candidates.push(result.candidate);
+    else rejected[result.reason||"insufficient_evidence"]=(rejected[result.reason||"insufficient_evidence"]||0)+1;
   }
-
-  const seen=new Set<string>();
-  const dedup=all.filter(x=>x.url&&!seen.has(x.url)&&seen.add(x.url));
-  const candidates=await judge(e,dedup,b.target||"business_priority");
-
+  // Never use keyword-only or AI-only fallback to manufacture commercial leads.
+  // Individual Reddit posts remain outside this commercial RFQ search.
   return json({
     candidates,
     remaining_searches:Math.max(0,await countAvailable(e.DB)),
     diagnostics:{
-      raw_results:all.length,
-      deduped:dedup.length,
-      kept:candidates.length,
-      web_queries:webUsed,
-      source_families:["community","broad","b2b","reddit:ProxyJapan","reddit:internationalshopper"]
+      raw_results:all.length,unique_urls:seen.size,
+      qualified_buying_leads:candidates.length,excluded_by_reason:rejected,
+      web_queries:queries.length,query_errors:queryErrors,source_family:"individual B2B buy leads"
     }
-  })
+  });
 }
 async function ensureSourcingSchema(db:DB){
   await db.batch([
@@ -181,4 +188,4 @@ async function ensureSourcingSchema(db:DB){
 }
 async function createLead(r:Request,e:Env){const b=await r.json()as any;if(!b.url||!b.excerpt)return json({error:"候補情報が不足しています。"},400);const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(b.url)),key=Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,"0")).join("");if(await e.DB.prepare("SELECT id FROM sourcing_leads WHERE duplicate_key=?").bind(key).first())return json({error:"この情報は既に接触候補へ追加されています。"},409);const t=now(),signal=id(),lead=id();await e.DB.batch([e.DB.prepare("INSERT INTO sourcing_signals (id,public_url,source_platform,source_type,published_at,display_name,evidence_excerpt,country,buyer_type,need_types,requested_item,repeat_signal,commercial_scale,contact_route,evidence_summary,evidence_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(signal,b.url,b.source_platform||"Web",b.source_type||"explicit_demand",b.published_at||"不明",b.display_name||b.title||"公開情報",b.excerpt,b.country||"不明",b.buyer_type||"不明",JSON.stringify(b.need_types||[]),b.requested_item||"不明",b.repeat_signal||"不明",b.commercial_scale||"不明",b.contact_route||"不明",b.evidence_summary||b.excerpt,b.evidence_status||"要確認",t,t),e.DB.prepare("INSERT INTO sourcing_leads (id,signal_id,display_name,country,public_url,evidence_excerpt,evidence_summary,requested_item,contact_route,duplicate_key,stage,human_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'reviewed','awaiting_review',?,?)").bind(lead,signal,b.display_name||b.title||"公開情報",b.country||"不明",b.url,b.excerpt,b.evidence_summary||b.excerpt,b.requested_item||"不明",b.contact_route||"不明",key,t,t),e.DB.prepare("INSERT INTO sourcing_events (id,lead_id,event_type,from_stage,to_stage,occurred_at) VALUES (?,?,'lead_created','signal_discovered','reviewed',?)").bind(id(),lead,t)]);return json({id:lead},201)}
 async function setStage(r:Request,e:Env,leadId:string){const b=await r.json()as{stage?:string},allowed=["reviewed","contact_ready","contacted","replied","sourcing_request","quote","paid","repeat","larger_order"];if(!b.stage||!allowed.includes(b.stage))return json({error:"無効なステージです。"},400);const old=await e.DB.prepare("SELECT stage FROM sourcing_leads WHERE id=?").bind(leadId).first<{stage:string}>();if(!old)return json({error:"候補が見つかりません。"},404);const t=now();await e.DB.batch([e.DB.prepare("UPDATE sourcing_leads SET stage=?,updated_at=? WHERE id=?").bind(b.stage,t,leadId),e.DB.prepare("INSERT INTO sourcing_events (id,lead_id,event_type,from_stage,to_stage,occurred_at) VALUES (?,?,'stage_changed',?,?,?)").bind(id(),leadId,old.stage,b.stage,t)]);return json({ok:true})}
-export default{async fetch(r:Request,e:Env){const u=new URL(r.url);if(r.method==="GET"&&u.pathname==="/")return new Response(html,{headers:{"content-type":"text/html;charset=utf-8"}});if(r.method==="GET"&&u.pathname==="/app.js")return new Response(APP_JS,{headers:{"content-type":"application/javascript;charset=utf-8","cache-control":"no-store"}});if(r.method==="POST"&&u.pathname==="/api/search"){try{return await searchAll(r,e)}catch{return json({error:"公開情報検索を実行できませんでした。"},503)}}if(r.method==="GET"&&u.pathname==="/api/leads"){await ensureSourcingSchema(e.DB);const x=await e.DB.prepare("SELECT id,display_name,country,public_url,evidence_excerpt,evidence_summary,requested_item,contact_route,stage FROM sourcing_leads ORDER BY updated_at DESC LIMIT 100").all();return json(x.results)}if(r.method==="POST"&&u.pathname==="/api/leads"){await ensureSourcingSchema(e.DB);return createLead(r,e);}const m=u.pathname.match(/^\/api\/leads\/([^/]+)\/stage$/);if(r.method==="POST"&&m){await ensureSourcingSchema(e.DB);return setStage(r,e,m[1]);}return json({error:"not_found"},404)}};
+export default{async fetch(r:Request,e:Env){const u=new URL(r.url);if(r.method==="GET"&&u.pathname==="/")return new Response(html,{headers:{"content-type":"text/html;charset=utf-8"}});if(r.method==="GET"&&u.pathname==="/app.js")return new Response(APP_JS,{headers:{"content-type":"application/javascript;charset=utf-8","cache-control":"no-store"}});if(r.method==="POST"&&u.pathname==="/api/search"){try{return await searchAll(r,e)}catch{return json({error:"公開情報検索を実行できませんでした。"},503)}}if(r.method==="GET"&&u.pathname==="/api/health")return json({ok:true,version:"buyer-rfq-v1",scope:"overseas buyers seeking suppliers from Japan",max_web_queries_per_click:2});if(r.method==="GET"&&u.pathname==="/api/leads"){await ensureSourcingSchema(e.DB);const x=await e.DB.prepare("SELECT id,display_name,country,public_url,evidence_excerpt,evidence_summary,requested_item,contact_route,stage FROM sourcing_leads ORDER BY updated_at DESC LIMIT 100").all();return json(x.results)}if(r.method==="POST"&&u.pathname==="/api/leads"){await ensureSourcingSchema(e.DB);return createLead(r,e);}const m=u.pathname.match(/^\/api\/leads\/([^/]+)\/stage$/);if(r.method==="POST"&&m){await ensureSourcingSchema(e.DB);return setStage(r,e,m[1]);}return json({error:"not_found"},404)}};
