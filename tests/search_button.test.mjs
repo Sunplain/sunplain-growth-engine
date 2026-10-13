@@ -59,7 +59,7 @@ test("one click issues exactly one request, disables during search, and re-enabl
  f.finishSearch();
  await Promise.all([click,duplicate]);
  assert.equal(button.disabled,false);
- assert.match(f.ids["#msg"].textContent,/条件一致 0件/);
+ assert.match(f.ids["#msg"].textContent,/合格 0件/);
 });
 test("no request is sent to /api/search until a click",async()=>{
  const f=fixture();
