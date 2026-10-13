@@ -7,7 +7,7 @@ export const APP_JS = String.raw`
   function t(tag,value,cls){const el=document.createElement(tag);if(cls)el.className=cls;el.textContent=value??'';return el}
   function field(parent,label,value){const box=document.createElement('div');box.appendChild(t('b',label));box.appendChild(document.createElement('br'));box.appendChild(document.createTextNode(value||'不明'));parent.appendChild(box)}
   function renderStats(list){
-    const data=[['合格した買付案件',list.length],['元URLあり',list.filter(c=>c.url&&/^https?:\\/\\//.test(c.url)).length],['連絡方法確認済み',0],['確認待ち',list.length]];
+    const data=[['合格した買付案件',list.length],['元URLあり',list.filter(c=>c.url&&/^https?:\\/\\//.test(c.url)).length],['継続発注の記載',list.filter(c=>String(c.repeat_signal||'').includes('言及')).length],['確認待ち',list.length]];
     const root=q('#stats');root.innerHTML='';
     data.forEach(([name,n])=>{const box=document.createElement('div');box.className='stat';box.appendChild(t('span',name));box.appendChild(t('b',String(n)));root.appendChild(box)})
   }
