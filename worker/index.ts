@@ -1,3 +1,4 @@
+import { parseTradeLead } from "./buyer_leads.mjs";
 import { APP_JS } from "./app";
 type Stmt={all<T>():Promise<{results:T[]}>;bind(...x:unknown[]):{first<T>():Promise<T|null>;run():Promise<unknown>}};
 type DB={prepare(q:string):Stmt;batch(x:unknown[]):Promise<unknown>};
@@ -14,7 +15,7 @@ const html=[
 "<section><h2>1. どんな需要を探しますか？</h2><div class=grid><div><b>対象地域</b><select id=region><option value=global>Global</option><option>North America</option><option>Latin America & Caribbean</option><option>Europe</option><option>East Asia</option><option>Southeast Asia</option><option>South Asia</option><option>Middle East</option><option>Africa</option><option>Central Asia</option><option>Oceania</option></select></div><div><b>対象</b><select id=target><option value=business_priority>法人・事業者を優先</option><option value=include_individual>個人を含む</option></select></div></div><p><b>探す需要</b></p><div class=checks>",
 "<label class=opt><input type=checkbox name=need value=find checked> 日本で商品を探してほしい</label><label class=opt><input type=checkbox name=need value=buy checked> 日本で代理購入してほしい</label><label class=opt><input type=checkbox name=need value=supplier checked> 日本の仕入先を探している</label><label class=opt><input type=checkbox name=need value=consolidate checked> 複数商品をまとめて発送してほしい</label><label class=opt><input type=checkbox name=need value=partner checked> 日本側の継続的な調達パートナーを探している</label>",
 "</div><button id=search>現在の需要を探す</button><p id=msg class=small></p></section>",
-"<section><h2>2. 発見した需要</h2><div id=stats class=stats><div class=stat><span>直接需要</span><b>0</b></div><div class=stat><span>買付案件</span><b>0</b></div><div class=stat><span>既存輸入企業</span><b>0</b></div><div class=stat><span>接触経路あり</span><b>0</b></div></div><div id=results><p class=small>まだ検索していません。</p></div></section>",
+"<section><h2>2. 発見した需要</h2><div id=stats class=stats><div class=stat><span>直接需要</span><b>0</b></div><div class=stat><span>買付案件</span><b>0</b></div><div class=stat><span>既存輸入企業</span><b>0</b></div><div class=stat><span>元ページあり</span><b>0</b></div></div><div id=results><p class=small>まだ検索していません。</p></div></section>",
 "<section><h2>3. 接触候補</h2><div id=pipeline class=pipeline></div><div id=leads></div></section></main>",
 "<script>const $=s=>document.querySelector(s),E=s=>{const d=document.createElement('div');d.textContent=String(s??'');return d.innerHTML};let found=[];const typeLabel={explicit_demand:'直接需要',buying_lead:'買付案件',existing_importer:'既存輸入企業'},stageLabel={reviewed:'確認済み',contact_ready:'接触可能',contacted:'接触済み',replied:'返信あり',sourcing_request:'調達依頼',quote:'見積提示',paid:'入金',repeat:'再注文',larger_order:'取引拡大'},stages=Object.keys(stageLabel);",
 "function stats(cs){const n=t=>cs.filter(x=>x.source_type===t).length,contact=cs.filter(x=>x.contact_route&&x.contact_route!=='不明').length;$('#stats').innerHTML=[['直接需要',n('explicit_demand')],['買付案件',n('buying_lead')],['既存輸入企業',n('existing_importer')],['接触経路あり',contact]].map(x=>'<div class=stat><span>'+x[0]+'</span><b>'+x[1]+'</b></div>').join('')}",
@@ -57,7 +58,21 @@ function redditSeeds(region:string,needs:string[]){
   return q.slice(0,4)
 }
 function platform(url:string){try{const u=new URL(url),h=u.hostname.toLowerCase(),p=u.pathname;if(h.includes("reddit.com"))return"Reddit";if(h.endsWith("linkedin.com")&&p.startsWith("/posts/"))return"LinkedIn 公開投稿";if((h==="x.com"||h.endsWith("twitter.com"))&&p.includes("/status/"))return"X 公開投稿"}catch{}return"Web"}
-async function tavily(query:string,hint:string){const r=await fetch("https://api.tavily.com/search",{method:"POST",headers:{"content-type":"application/json","X-Tavily-Access-Mode":"keyless"},body:JSON.stringify({query,max_results:8,search_depth:"advanced"})});if(!r.ok)throw Error("search");const x=await r.json()as{results?:Array<{title?:string;content?:string;url?:string}>};return(x.results??[]).filter(v=>v.url).map(v=>({title:v.title??"公開情報",excerpt:(v.content??v.title??"").slice(0,900),display_name:(v.title??"公開情報").slice(0,180),url:v.url!,source_platform:platform(v.url!),source_type_hint:hint}as Raw))}
+async function tavily(query:string,hint:string){
+  const r=await fetch("https://api.tavily.com/search",{
+    method:"POST",headers:{"content-type":"application/json","X-Tavily-Access-Mode":"keyless"},
+    body:JSON.stringify({query,max_results:12,search_depth:"advanced",include_raw_content:true,
+      include_domains:["go4worldbusiness.com"]})
+  });
+  if(!r.ok)throw Error("Tavily status "+r.status);
+  const x=await r.json()as{results?:Array<{title?:string;content?:string;raw_content?:string;url?:string}>};
+  return(x.results??[]).filter(v=>v.url).map(v=>({
+    title:v.title??"公開情報",
+    excerpt:(v.raw_content||v.content||v.title||"").slice(0,6000),
+    display_name:(v.title??"公開情報").slice(0,180),
+    url:v.url!,source_platform:platform(v.url!),source_type_hint:hint
+  } as Raw));
+}
 async function redditSubreddit(subreddit:string,q:string){
   try{
     const url="https://www.reddit.com/r/"+encodeURIComponent(subreddit)+"/search.json?restrict_sr=1&sort=new&limit=25&q="+encodeURIComponent(q);
@@ -127,50 +142,46 @@ async function judge(e:Env,items:Raw[],target:string){
 }
 async function searchAll(r:Request,e:Env){
   const b=await r.json()as{region?:string;target?:string;needs?:string[]};
-  const needs=b.needs||Object.keys(needLabels);
-  const region=b.region||"global";
   const available=await countAvailable(e.DB);
   if(available<1)return json({error:"本日のWeb検索上限（10回）に達しました。明日また実行できます。"},429);
-
-  const plan=demandQueries(region,needs);
+  const region=b.region||"global";
+  const usage=await usageToday(e.DB);
+  // Two focused buyer-side RFQ searches. A third slot is never spent automatically.
+  // The first searches any product; the second rotates to diversify actual buy leads.
+  const topics=["Japanese","Used Machinery","Food","Auto Parts","Industrial Equipment","Seafood","Daily Goods","Used Vehicles","Electrical Equipment","Consumer Products"];
+  const topic=topics[(Math.floor(Date.now()/86400000)+usage)%topics.length];
+  const queries=[
+    'site:go4worldbusiness.com/buylead/view/ "Looking for suppliers from: Japan" "Quantity Required" "Wanted"',
+    'site:go4worldbusiness.com/buylead/view/ "Looking for suppliers from" "Japan" "Buyer From" "'+topic+'"'
+  ].slice(0,Math.min(available,2));
   const all:Raw[]=[];
-  let webUsed=0;
-
-  // Mirror the research flow: one community search, one broad demand search,
-  // and one buyer/RFQ source search. Never spend more than 3 web slots.
-  const webPlan=[
-    {q:plan.community,h:"explicit_demand"},
-    {q:plan.broad,h:"explicit_demand"},
-    {q:plan.b2b,h:"buying_lead"}
-  ].slice(0,Math.min(3,available));
-
-  for(const p of webPlan){
-    all.push(...await tavily(p.q,p.h));
-    webUsed++;
+  const queryErrors:string[]=[];
+  for(const q of queries){
+    try{all.push(...await tavily(q,"buying_lead"))}
+    catch(e){queryErrors.push(String(e).slice(0,130))}
+    // Count attempted Tavily operations, including failed provider requests.
+    await addUsage(e.DB,1);
   }
-  if(webUsed)await addUsage(e.DB,webUsed);
-
-  // Zero-Tavily-cost discovery from the subreddits that repeatedly produce real requests.
-  const seeds=redditSeeds(region,needs);
-  for(const subreddit of ["ProxyJapan","internationalshopper"]){
-    for(const q of seeds.slice(0,2))all.push(...await redditSubreddit(subreddit,q));
+  const seen=new Set<string>(), rejected:Record<string,number>={};
+  const candidates:any[]=[];
+  for(const row of all){
+    if(!row.url||seen.has(row.url))continue;
+    seen.add(row.url);
+    const result=parseTradeLead(row,{region,today:day()}) as any;
+    if(result.candidate)candidates.push(result.candidate);
+    else rejected[result.reason||"insufficient_evidence"]=(rejected[result.reason||"insufficient_evidence"]||0)+1;
   }
-
-  const seen=new Set<string>();
-  const dedup=all.filter(x=>x.url&&!seen.has(x.url)&&seen.add(x.url));
-  const candidates=await judge(e,dedup,b.target||"business_priority");
-
+  // Never use keyword-only or AI-only fallback to manufacture commercial leads.
+  // Individual Reddit posts remain outside this commercial RFQ search.
   return json({
     candidates,
     remaining_searches:Math.max(0,await countAvailable(e.DB)),
     diagnostics:{
-      raw_results:all.length,
-      deduped:dedup.length,
-      kept:candidates.length,
-      web_queries:webUsed,
-      source_families:["community","broad","b2b","reddit:ProxyJapan","reddit:internationalshopper"]
+      raw_results:all.length,unique_urls:seen.size,
+      qualified_buying_leads:candidates.length,excluded_by_reason:rejected,
+      web_queries:queries.length,query_errors:queryErrors,source_family:"individual B2B buy leads"
     }
-  })
+  });
 }
 async function ensureSourcingSchema(db:DB){
   await db.batch([
