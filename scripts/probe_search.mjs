@@ -1,31 +1,31 @@
-const queries=[
-'"Wanted : Japanese Drinks Like Juice Drinks Ramune" "go4worldbusiness"',
-'"Wanted : Used Machine Like Excavator Road Roller" "Buyer From" Japan',
-'"Looking for suppliers from: Japan" "Buyer From United States" "Quantity Required"',
-'"Looking for suppliers from: Japan" "Buyer From Viet Nam" "Quantity Required"',
-'"Looking for suppliers from: Japan" "Buyer From Egypt" "Quantity Required"',
-'"Wanted" "Buyer From United States" "Looking for suppliers from: Japan" site:go4worldbusiness.com',
-'go4worldbusiness.com/buylead/view/ Wanted Japan suppliers buyer',
-'"Japanese" "Looking for suppliers from: Japan" "-Buyer From Japan"'
+const pages=[
+ "https://www.go4worldbusiness.com/buyers/united-states/juice.html",
+ "https://www.go4worldbusiness.com/buyers/viet-nam/construction-equipment-machinery.html",
+ "https://www.go4worldbusiness.com/buyers/egypt/frozen-fish.html",
+ "https://www.go4worldbusiness.com/buyers/egypt/seafood.html",
+ "https://www.go4worldbusiness.com/buyers/united-kingdom/networking-devices.html",
+ "https://www.go4worldbusiness.com/buyers/australia/japanese-clothes.html"
 ];
-for(const [i,query] of queries.entries()){
- try{
-  const r=await fetch("https://api.tavily.com/search",{method:"POST",headers:{"content-type":"application/json","X-Tavily-Access-Mode":"keyless"},body:JSON.stringify({query,max_results:8,search_depth:"advanced",include_raw_content:true,include_domains:["go4worldbusiness.com"]})});
-  console.log("Q",i,"http",r.status,"query",query);
-  if(!r.ok){console.log("ERROR", (await r.text()).slice(0,200));continue;}
-  const j=await r.json();let individual=0,buyerListing=0;
-  for(const e of j.results||[]){
-   const isInd=/go4worldbusiness\.com\/buylead\/view\/\d+/i.test(e.url||"");
-   const raw=e.raw_content||"";let links=[...new Set((raw.match(/(?:https?:\/\/www\.go4worldbusiness\.com)?\/buylead\/view\/\d+\/[^\s)>\]]+/g)||[]))];
-   if(isInd)individual++;if(links.length)buyerListing++;
-   console.log("RESULT",i,JSON.stringify({url:e.url,title:(e.title||"").slice(0,110),individual:isInd,links:links.slice(0,2),raw_len:raw.length}));
-  }
-  console.log("SUMMARY",i,"count",(j.results||[]).length,"individual",individual,"listing-with-links",buyerListing);
- }catch(e){console.log("PROBE ERROR",i,String(e).slice(0,200));}
+const clean=h=>h.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi," ").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ").replace(/<[^>]+>/g," ").replace(/&nbsp;|&#160;/g," ").replace(/&amp;/g,"&").replace(/\s+/g," ").trim();
+async function fetchPage(url) {
+ const r=await fetch(url,{headers:{"user-agent":"Mozilla/5.0 (compatible; PWTRDPreview/1.0)"}});
+ return {ok:r.ok,status:r.status,url:r.url,body:r.ok?await r.text():""};
 }
-try{
- const target="https://www.go4worldbusiness.com/buylead/view/1322302/wanted-%3A-japanese-drinks-like-juice-drinks-ramune.html";
- const r=await fetch(target,{headers:{"user-agent":"Mozilla/5.0 (compatible; SunplainResearch/1.0)"}});
- const body=await r.text();
- console.log("DIRECT_FETCH",r.status,r.url,body.length,/Buyer From United States/i.test(body),/Quantity Required/i.test(body),body.slice(0,200).replace(/\s+/g," "));
-}catch(e){console.log("DIRECT_FETCH_ERROR",String(e).slice(0,200));}
+for(const url of pages){
+ try{
+  const a=await fetchPage(url);
+  const paths=[...new Set([...a.body.matchAll(/(?:https?:\/\/www\.go4worldbusiness\.com)?\/buylead\/view\/\d+\/[^"'\s<>)]*/gi)].map(m=>m[0].replace(/&amp;.*$/,"").replace(/^\/\//,"https://")))];
+  console.log("LIST",JSON.stringify({url,status:a.status,body:a.body.length,link_count:paths.length,first:paths.slice(0,4)}));
+  if(!paths.length)continue;
+  const first=paths.find(x=>!x.includes('japan/'))||paths[0];
+  const full=first.startsWith("http")?first:new URL(first,a.url).href;
+  const d=await fetchPage(full),plain=clean(d.body);
+  const fieldWords=["Wanted :", "Buyer From","Destination:","Quantity Required:","Looking for suppliers from:","Contact :"];
+  console.log("DETAIL",JSON.stringify({url:full,status:d.status,htmlLength:d.body.length,
+    title:(d.body.match(/<title[^>]*>([\s\S]{0,400}?)<\/title>/i)||[])[1],
+    fields:fieldWords.map(w=>({field:w,index:plain.toLowerCase().indexOf(w.toLowerCase())})),
+    buyerContext:plain.slice(Math.max(0,plain.indexOf("Buyer From")-130),plain.indexOf("Buyer From")+440),
+    suppliersContext:plain.slice(Math.max(0,plain.indexOf("Looking for suppliers from")-160),plain.indexOf("Looking for suppliers from")+180)
+  }));
+ }catch(e){console.log("PAGE ERROR",url,String(e).slice(0,250))}
+}
